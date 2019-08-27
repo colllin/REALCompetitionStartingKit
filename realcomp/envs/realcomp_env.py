@@ -4,27 +4,31 @@ import numpy as np
 import pybullet
 import gym 
 from .realcomp_robot import Kuka 
-
-
 import sys, os
 
-#import kukacomp.data as data
-#bullet_client.setAdditionalSearchPath(dataObsSpaces.getDataPath())
+"""
+Realcomp
+"""
 
 def DefaultRewardFunc(observation):
     return 0
 
 class Goal:
-    def __init__(self, initial_state=[0, 0, 0], 
-            final_state=[0, 0, 0], retina=None):
+    def __init__(self, initial_state=None,
+            final_state=None, retina=None, retina_before = None, challenge = None):
         self.initial_state = initial_state
         self.final_state = final_state
         self.retina = retina
+        self.retina_before = retina_before
+        self.challenge = challenge
 
 class REALCompEnv(MJCFBaseBulletEnv):
-    
-    intrinsic_timesteps = 50 # int(1e7)
-    extrinsic_timesteps = 50 # int(1e3)
+    """ Create a REALCompetion environment inheriting by gym.env
+
+    """
+
+    intrinsic_timesteps = int(1e7)
+    extrinsic_timesteps = int(2e3)
     
     def __init__(self, render=False):
 
@@ -43,7 +47,7 @@ class REALCompEnv(MJCFBaseBulletEnv):
 
         self.reward_func = DefaultRewardFunc
         
-        self.robot.used_objects = ["table", "tomato", "mustard", "orange"]
+        self.robot.used_objects = ["table", "tomato", "mustard", "cube"]
         self.set_eye("eye")
 
         self.goal = Goal(retina=self.observation_space.spaces[
@@ -52,8 +56,7 @@ class REALCompEnv(MJCFBaseBulletEnv):
         self.goal_idx = -1
    
     def setCamera(self):
-        '''
-        initialize environment camera
+        ''' Initialize environment camera
         '''
         self.envCamera = EnvCamera(
                 distance=self._cam_dist, 
@@ -64,24 +67,64 @@ class REALCompEnv(MJCFBaseBulletEnv):
                 width=self._render_width,
                 height=self._render_height)
     
-    def set_eye(self, name):
+    def set_eye(self, name, eye_pos=[0.01, 0, 1.2], target_pos=[0, 0, 0]):
+        ''' Initialize an eye camera
+        @name the label of the created eye camera
         '''
-        initialize eye
-        '''
-        pos = [0.01, 0, 1.2]
-        cam = EyeCamera(pos, [0, 0, 0])
+        cam = EyeCamera(eye_pos, target_pos)
         self.eyes[name] = cam
 
     def set_goal(self):
         if self.goals is None:
-            self.goals = np.load(
+            self.goals = list(np.load(
                     os.path.join( 
                         os.path.dirname(os.path.dirname(os.path.realpath(__file__))),
                         "task",
-                        "goals_dataset.npy"))
+                        "goals_dataset.npy.npz"), allow_pickle=True).items())[0][1]
             self.goal_idx = 0
-        goal = self.goals[self.goal_idx]
+        self.goal = self.goals[self.goal_idx]
+        
+        for obj in self.goal.initial_state.keys():
+            self.robot.object_bodies[obj].reset_position(self.goal.initial_state[obj][:3])
+
         self.goal_idx += 1
+
+    def extrinsicFormula(self, p_goal, p, a_goal, a, w = 1):
+        pos_dist = np.linalg.norm(p_goal-p)
+        pos_const = - np.log(0.25) / 0.05 # Score goes down to 0.25 within 5cm 
+        pos_value = np.exp(- pos_const * pos_dist)
+
+        orient_dist = min(np.linalg.norm(a_goal-a),np.linalg.norm(a_goal+a))
+        orient_const = - np.log(0.25) / 0.30 # Score goes down to 0.25 within 0.3
+        orient_value = np.exp(- orient_const * orient_dist)
+
+        value = w * pos_value + (1-w) * orient_value
+        return value
+
+    def evaluateGoal(self):
+        initial_state = self.goal.initial_state
+        final_state = self.goal.final_state
+        current_state = self.robot.object_bodies
+
+        score = 0
+        n_obj = len(final_state.keys())
+        for obj in final_state.keys():
+            p = np.array(current_state[obj].get_position())
+            p_goal = np.array(final_state[obj][:3])
+            a = np.array(current_state[obj].get_pose()[3:])
+            a_goal = np.array(final_state[obj][3:])
+
+            if self.goal.challenge == '3D':
+                w = 0.75
+            else:
+                w = 1
+
+            objScore = self.extrinsicFormula(p_goal, p, a_goal, a, w) 
+            print("Object: {} Score: {:.4f}".format(obj,objScore))
+            score += objScore / n_obj
+
+        print("Goal score: {:.4f}".format(score))
+        return self.goal.challenge, score
 
         
     def create_single_player_scene(self, bullet_client):
@@ -112,6 +155,19 @@ class REALCompEnv(MJCFBaseBulletEnv):
 
             rgb_array = self.envCamera.render(self._p)
             return rgb_array
+
+    def get_part_pos(self, name):
+        #print(self.robot.parts.keys())
+        return self.robot.parts[name].get_position()
+    
+    def get_obj_pos(self, name):
+        return self.robot.object_bodies[name].get_position()
+
+    def get_obj_pose(self, name):
+        return self.robot.object_bodies[name].get_pose()
+
+    def get_contacts(self):
+        return self.robot.get_contacts()
     
     def get_retina(self):
         '''
@@ -170,6 +226,12 @@ class REALCompEnv(MJCFBaseBulletEnv):
 
         return observation, reward, done, info
 
+class REALCompEnvSingleObj(MJCFBaseBulletEnv):
+    def __init__(self, render=False):
+        super(REALCompEnvSingleObj, self).__init__(render)
+        self.robot.used_objects = ["table", "orange"]
+
+
 class EnvCamera:
 
     def __init__(self, distance, yaw, pitch, roll, pos, 
@@ -208,7 +270,7 @@ class EnvCamera:
                 renderer=pybullet.ER_BULLET_HARDWARE_OPENGL
                 )
 
-        rgb_array = np.array(px)
+        rgb_array = np.array(px).reshape(self.render_height, self.render_width, 4)
         rgb_array = rgb_array[:, :, :3]
 
         return rgb_array
