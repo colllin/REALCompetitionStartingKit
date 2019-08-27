@@ -1,5 +1,5 @@
 from setuptools import setup
-from setuptools.command.install import install as DistutilsInstall
+# from setuptools.command.install import install as DistutilsInstall
 from setuptools.command.egg_info import egg_info as EggInfo
 
 import os
@@ -12,10 +12,10 @@ def cp_data():
     dest_path = pybullet_data.getDataPath()
     copy_tree(src_path, dest_path)
 
-class MyInstall(DistutilsInstall):
-    def run(self):
-        DistutilsInstall.run(self)
-#         cp_data()
+# class MyInstall(DistutilsInstall):
+#     def run(self):
+#         DistutilsInstall.run(self)
+# #         cp_data()
 
 class MyEgg(EggInfo):
     def run(self):
@@ -26,7 +26,7 @@ setup(
     name='REALComp',
     version='0.1',
     cmdclass={
-        'install': MyInstall,
+#         'install': MyInstall,
         'egg_info': MyEgg
     },
     install_requires=[
